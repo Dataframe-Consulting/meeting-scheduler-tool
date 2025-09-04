@@ -7,8 +7,8 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies
-RUN npm ci --only=production
+# Install ALL dependencies (including dev) for building
+RUN npm ci
 
 # Copy source code
 COPY . .
@@ -19,6 +19,9 @@ RUN npm run build
 # Production stage
 FROM node:18-alpine AS runner
 
+# Install curl for healthcheck
+RUN apk add --no-cache curl
+
 # Set working directory
 WORKDIR /app
 
@@ -26,20 +29,25 @@ WORKDIR /app
 RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 tooluser
 
+# Copy package files first
+COPY --from=builder --chown=tooluser:nodejs /app/package*.json ./
+
+# Install only production dependencies
+RUN npm ci --only=production && npm cache clean --force
+
 # Copy built application
 COPY --from=builder --chown=tooluser:nodejs /app/dist ./dist
-COPY --from=builder --chown=tooluser:nodejs /app/node_modules ./node_modules
-COPY --from=builder --chown=tooluser:nodejs /app/package.json ./package.json
 
 # Switch to non-root user
 USER tooluser
 
-# Expose port
-EXPOSE 3000
+# Railway uses PORT environment variable
+ENV PORT=3000
+EXPOSE ${PORT}
 
-# Health check
+# Health check (Railway compatible)
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD curl -f http://localhost:3000/health || exit 1
+  CMD curl -f http://localhost:${PORT}/health || exit 1
 
 # Start the application
-CMD ["npm", "start"]
+CMD ["node", "dist/index.js"]
